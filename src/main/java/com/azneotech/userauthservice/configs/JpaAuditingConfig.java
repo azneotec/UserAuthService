@@ -1,4 +1,4 @@
-package com.azneotech.userauthservice.config;
+package com.azneotech.userauthservice.configs;
 
 import org.springframework.context.annotation.Configuration;
 import org.springframework.data.jpa.repository.config.EnableJpaAuditing;

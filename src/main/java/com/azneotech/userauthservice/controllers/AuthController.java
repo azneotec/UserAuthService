@@ -37,15 +37,12 @@ public class AuthController {
         return ResponseEntity.status(HttpStatus.CREATED).body(responseDto);
     }
 
-    @PostMapping("/signup")
+    @PostMapping("/login")
     public ResponseEntity<UserResponseDto> login(@RequestBody LoginRequestDto requestDto) {
         User user = authService.login(
                 requestDto.getEmail(),
                 requestDto.getPassword()
         );
-        if (user == null) {
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
-        }
         UserResponseDto responseDto = mapUserToUserResponseDto(user);
         return ResponseEntity.status(HttpStatus.OK).body(responseDto);
     }
@@ -59,11 +56,6 @@ public class AuthController {
                 .phoneNumber(user.getPhoneNumber())
                 .roles(roles)
                 .build();
-    }
-
-    @PostMapping("/login")
-    public ResponseEntity<String> login() {
-        return ResponseEntity.ok().build();
     }
 
 }
