@@ -1,78 +1,105 @@
 package com.azneotech.userauthservice.controllers;
 
 import com.azneotech.userauthservice.dtos.AuthSignupRequestDto;
-import com.azneotech.userauthservice.dtos.UserResponseDto;
+import com.azneotech.userauthservice.dtos.ForgotPasswordRequestDto;
 import com.azneotech.userauthservice.dtos.LoginRequestDto;
+import com.azneotech.userauthservice.dtos.LoginResponseDto;
+import com.azneotech.userauthservice.dtos.MessageResponseDto;
+import com.azneotech.userauthservice.dtos.ResetPasswordRequestDto;
+import com.azneotech.userauthservice.dtos.UserResponseDto;
 import com.azneotech.userauthservice.dtos.ValidateTokenRequestDto;
-import com.azneotech.userauthservice.models.Role;
+import com.azneotech.userauthservice.dtos.ValidateTokenResponseDto;
+import com.azneotech.userauthservice.mappers.UserMapper;
 import com.azneotech.userauthservice.models.User;
+import com.azneotech.userauthservice.security.AuthenticatedUser;
 import com.azneotech.userauthservice.services.IAuthService;
-import org.antlr.v4.runtime.misc.Pair;
-import org.springframework.http.HttpHeaders;
+import com.azneotech.userauthservice.services.IPasswordResetService;
+import com.azneotech.userauthservice.services.LoginResult;
+import com.azneotech.userauthservice.services.TokenValidationResult;
+import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
-import org.springframework.util.LinkedMultiValueMap;
-import org.springframework.util.MultiValueMap;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.util.List;
-
 @RestController
 @RequestMapping("/auth")
 public class AuthController {
 
-    private final IAuthService authService;
+    static final String FORGOT_PASSWORD_MESSAGE =
+            "If an account exists for that email, a password reset link has been sent.";
+    static final String RESET_PASSWORD_MESSAGE = "Password has been reset. Please log in again.";
 
-    public AuthController(IAuthService authService) {
+    private final IAuthService authService;
+    private final IPasswordResetService passwordResetService;
+
+    public AuthController(IAuthService authService, IPasswordResetService passwordResetService) {
         this.authService = authService;
+        this.passwordResetService = passwordResetService;
     }
 
     @PostMapping("/signup")
-    public ResponseEntity<UserResponseDto> signup(@RequestBody AuthSignupRequestDto requestDto) {
+    public ResponseEntity<UserResponseDto> signup(@Valid @RequestBody AuthSignupRequestDto requestDto) {
         User user = authService.signup(
                 requestDto.getName(),
                 requestDto.getEmail(),
                 requestDto.getPhoneNumber(),
                 requestDto.getPassword()
         );
-        UserResponseDto responseDto = mapUserToUserResponseDto(user);
-        return ResponseEntity.status(HttpStatus.CREATED).body(responseDto);
+        return ResponseEntity.status(HttpStatus.CREATED).body(UserMapper.toUserResponseDto(user));
     }
 
     @PostMapping("/login")
-    public ResponseEntity<UserResponseDto> login(@RequestBody LoginRequestDto requestDto) {
-        Pair<User, String> response = authService.login(
-                requestDto.getEmail(),
-                requestDto.getPassword()
-        );
+    public ResponseEntity<LoginResponseDto> login(@Valid @RequestBody LoginRequestDto requestDto) {
+        LoginResult result = authService.login(requestDto.getEmail(), requestDto.getPassword());
 
-        User user = response.a;
-        UserResponseDto responseDto = mapUserToUserResponseDto(user);
-
-        String token = response.b;
-        MultiValueMap<String, String> headers = new LinkedMultiValueMap<>();
-        headers.add(HttpHeaders.SET_COOKIE, "auth_session_id = " + token);
-
-        return new ResponseEntity<>(responseDto, headers, HttpStatus.OK);
-    }
-
-    @PostMapping("/validateToken")
-    public Boolean validateToken(@RequestBody ValidateTokenRequestDto requestDto) {
-        return authService.validateToken(requestDto.getToken());
-    }
-
-    private UserResponseDto mapUserToUserResponseDto(User user) {
-        List<String> roles = user.getRoles().stream().map(Role::getValue).toList();
-        return UserResponseDto.builder()
-                .id(user.getId())
-                .name(user.getName())
-                .email(user.getEmail())
-                .phoneNumber(user.getPhoneNumber())
-                .roles(roles)
+        LoginResponseDto responseDto = LoginResponseDto.builder()
+                .token(result.token())
+                .expiresAt(result.expiresAt())
+                .user(UserMapper.toUserResponseDto(result.user()))
                 .build();
+        return ResponseEntity.ok(responseDto);
+    }
+
+    /**
+     * Token introspection for other services. Always 200: the request itself succeeded and
+     * {@code valid} carries the answer.
+     */
+    @PostMapping("/validateToken")
+    public ResponseEntity<ValidateTokenResponseDto> validateToken(@Valid @RequestBody ValidateTokenRequestDto requestDto) {
+        TokenValidationResult result = authService.validateToken(requestDto.getToken());
+
+        ValidateTokenResponseDto responseDto = ValidateTokenResponseDto.builder()
+                .valid(result.valid())
+                .userId(result.userId())
+                .email(result.email())
+                .roles(result.roles())
+                .expiresAt(result.expiresAt())
+                .build();
+        return ResponseEntity.ok(responseDto);
+    }
+
+    /** Revokes the session behind the bearer token that authenticated this request. */
+    @PostMapping("/logout")
+    public ResponseEntity<Void> logout(@AuthenticationPrincipal AuthenticatedUser principal) {
+        authService.logout(principal.sessionId());
+        return ResponseEntity.noContent().build();
+    }
+
+    /** Always 200 with the same body, whether or not the email is registered. */
+    @PostMapping("/forgot-password")
+    public ResponseEntity<MessageResponseDto> forgotPassword(@Valid @RequestBody ForgotPasswordRequestDto requestDto) {
+        passwordResetService.requestReset(requestDto.getEmail());
+        return ResponseEntity.ok(new MessageResponseDto(FORGOT_PASSWORD_MESSAGE));
+    }
+
+    @PostMapping("/reset-password")
+    public ResponseEntity<MessageResponseDto> resetPassword(@Valid @RequestBody ResetPasswordRequestDto requestDto) {
+        passwordResetService.resetPassword(requestDto.getToken(), requestDto.getNewPassword());
+        return ResponseEntity.ok(new MessageResponseDto(RESET_PASSWORD_MESSAGE));
     }
 
 }

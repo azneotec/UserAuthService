@@ -10,18 +10,23 @@ import com.azneotech.userauthservice.models.UserSession;
 import com.azneotech.userauthservice.repos.RoleRepo;
 import com.azneotech.userauthservice.repos.SessionRepo;
 import com.azneotech.userauthservice.repos.UserRepo;
+import com.azneotech.userauthservice.utils.TokenHasher;
 import io.jsonwebtoken.Claims;
-import io.jsonwebtoken.JwtParser;
-import io.jsonwebtoken.Jwts;
-import io.jsonwebtoken.security.MacAlgorithm;
-import org.antlr.v4.runtime.misc.Pair;
+import io.jsonwebtoken.ExpiredJwtException;
+import io.jsonwebtoken.JwtException;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
-import javax.crypto.SecretKey;
-import java.time.Duration;
-import java.util.*;
+import java.time.Clock;
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Locale;
+import java.util.Optional;
 
+@Slf4j
 @Service
 public class AuthService implements IAuthService {
 
@@ -31,31 +36,35 @@ public class AuthService implements IAuthService {
     private final RoleRepo roleRepo;
     private final SessionRepo sessionRepo;
     private final PasswordEncoder passwordEncoder;
-    private final SecretKey secretKey;
+    private final IJwtService jwtService;
+    private final Clock clock;
 
     public AuthService(
             UserRepo userRepo,
             RoleRepo roleRepo,
             SessionRepo sessionRepo,
             PasswordEncoder passwordEncoder,
-            SecretKey secretKey
+            IJwtService jwtService,
+            Clock clock
     ) {
         this.userRepo = userRepo;
         this.roleRepo = roleRepo;
         this.sessionRepo = sessionRepo;
         this.passwordEncoder = passwordEncoder;
-        this.secretKey = secretKey;
+        this.jwtService = jwtService;
+        this.clock = clock;
     }
 
     @Override
+    @Transactional
     public User signup(String name, String email, String phoneNumber, String password) {
-        Optional<User> userOptional = userRepo.findByEmail(email);
-        if (userOptional.isPresent()) {
+        email = normalizeEmail(email);
+        if (userRepo.findByEmail(email).isPresent()) {
             throw new UserAlreadyExistsException("User with email " + email + " already exists");
         }
 
-        userOptional = userRepo.findByPhoneNumber(phoneNumber);
-        if (userOptional.isPresent()) {
+        // Phone is optional; only enforce uniqueness when one was supplied.
+        if (phoneNumber != null && !phoneNumber.isBlank() && userRepo.findByPhoneNumber(phoneNumber).isPresent()) {
             throw new UserAlreadyExistsException("User with phone number " + phoneNumber + " already exists");
         }
 
@@ -72,77 +81,110 @@ public class AuthService implements IAuthService {
                 .build();
         user.getRoles().add(defaultRole);
 
-        return userRepo.save(user);
+        try {
+            return userRepo.save(user);
+        } catch (DataIntegrityViolationException e) {
+            // The pre-checks above race with concurrent signups; the unique constraints are the real guard.
+            throw new UserAlreadyExistsException("User with this email or phone number already exists");
+        }
     }
 
     @Override
-    public Pair<User, String> login(String email, String password) {
+    @Transactional
+    public LoginResult login(String email, String password) {
+        email = normalizeEmail(email);
         Optional<User> userOptional = userRepo.findByEmail(email);
         if (userOptional.isEmpty()) {
             throw new UserNotRegisteredException("User with email " + email + " is not registered");
         }
         User user = userOptional.get();
+        if (user.getStatus() != Status.ACTIVE) {
+            throw new UserNotRegisteredException("User with email " + email + " is not active");
+        }
         if (!passwordEncoder.matches(password, user.getPassword())) {
             throw new PasswordMismatchException("Password mismatch: Please type the correct password");
         }
 
-        // Generate JWT, use Map DS for payload
-        Map<String, Object> claims = new HashMap<>();
-        claims.put("user_id", user.getId());
-        claims.put("issuer", "scaler");
-
-        long currentTime = System.currentTimeMillis();
-        long expirationTime = currentTime + Duration.ofMinutes(1).toMillis();
-        claims.put("iat", currentTime);
-        claims.put("exp", expirationTime);
-
-        List<String> roles = new ArrayList<>();
-        for (Role role : user.getRoles()) {
-            roles.add(role.getValue());
-        }
-        claims.put("access", roles);
-
-        String token = Jwts.builder()
-                .claims(claims)
-                .signWith(secretKey)
-                .compact();
+        IssuedToken issued = jwtService.issue(user);
 
         UserSession userSession = UserSession.builder()
-                .token(token)
+                .tokenHash(TokenHasher.sha256Hex(issued.token()))
+                .expiresAt(LocalDateTime.ofInstant(issued.expiresAt(), clock.getZone()))
                 .user(user)
                 .build();
         sessionRepo.save(userSession);
 
-        return new Pair<>(user, token);
+        return new LoginResult(user, issued.token(), issued.expiresAt());
     }
 
-    public Boolean validateToken(String token) {
-        Optional<UserSession> userSessionOptional = sessionRepo.findByToken(token);
-        if (userSessionOptional.isEmpty()) {
-            return false;
+    @Override
+    @Transactional
+    public TokenValidationResult validateToken(String token) {
+        // Verify the signature before touching the DB so forged or garbage tokens never cost a query.
+        Claims claims;
+        try {
+            claims = jwtService.parse(token);
+        } catch (ExpiredJwtException e) {
+            // Soft-delete the session so the row stays for auditing and the cleanup job has nothing to guess at.
+            sessionRepo.findByTokenHash(TokenHasher.sha256Hex(token))
+                    .filter(session -> session.getStatus() == Status.ACTIVE)
+                    .ifPresent(session -> {
+                        session.setStatus(Status.INACTIVE);
+                        sessionRepo.save(session);
+                    });
+            log.debug("Rejected expired token");
+            return TokenValidationResult.invalid();
+        } catch (JwtException | IllegalArgumentException e) {
+            log.debug("Rejected token: {}", e.getMessage());
+            return TokenValidationResult.invalid();
         }
 
-        JwtParser jwtParser = Jwts.parser()
-                .verifyWith(secretKey)
-                .build();
-        Claims claims = jwtParser.parseSignedClaims(token).getPayload();
-
-        Long expiry = claims.get("exp", Long.class);
-        Long currentTime = System.currentTimeMillis();
-
-        System.out.println("expiry: " + expiry);
-        System.out.println("currentTime: " + currentTime);
-
-        if (currentTime > expiry) {
-            UserSession userSession = userSessionOptional.get();
-//            userSession.setStatus(Status.INACTIVE);
-//            sessionRepo.save(userSession);
-            sessionRepo.deleteById(userSession.getId());
-
-            System.out.println("Token has expired");
-            return false;
+        Optional<UserSession> sessionOptional = sessionRepo.findByTokenHash(TokenHasher.sha256Hex(token));
+        if (sessionOptional.isEmpty()) {
+            log.debug("Rejected token with no matching session");
+            return TokenValidationResult.invalid();
+        }
+        UserSession session = sessionOptional.get();
+        if (session.getStatus() != Status.ACTIVE) {
+            log.debug("Rejected token for revoked session {}", session.getId());
+            return TokenValidationResult.invalid();
+        }
+        if (session.getUser().getStatus() != Status.ACTIVE) {
+            log.debug("Rejected token for inactive user {}", session.getUser().getId());
+            return TokenValidationResult.invalid();
         }
 
-        return true;
+        return new TokenValidationResult(
+                true,
+                Long.parseLong(claims.getSubject()),
+                claims.get(JwtService.CLAIM_EMAIL, String.class),
+                rolesFromClaims(claims),
+                claims.getExpiration().toInstant(),
+                session.getId()
+        );
     }
+
+    @Override
+    @Transactional
+    public void logout(Long sessionId) {
+        sessionRepo.findById(sessionId)
+                .filter(session -> session.getStatus() == Status.ACTIVE)
+                .ifPresent(session -> {
+                    session.setStatus(Status.INACTIVE);
+                    sessionRepo.save(session);
+                });
+    }
+
+    private static List<String> rolesFromClaims(Claims claims) {
+        Object roles = claims.get(JwtService.CLAIM_ROLES);
+        if (roles instanceof List<?> list) {
+            return list.stream().map(String::valueOf).toList();
+        }
+        return List.of();
+    }
+
+    private static String normalizeEmail(String email) {
+        return email == null ? null : email.trim().toLowerCase(Locale.ROOT);
+    }
+
 }

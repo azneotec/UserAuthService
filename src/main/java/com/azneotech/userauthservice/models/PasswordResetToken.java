@@ -12,9 +12,8 @@ import lombok.experimental.SuperBuilder;
 import java.time.LocalDateTime;
 
 /**
- * One row per issued JWT. Only the SHA-256 of the token is stored; a session is live while
- * {@code status == ACTIVE} and {@code expiresAt} is in the future. Logout, expiry and password reset
- * all flip {@code status} to {@code INACTIVE} rather than deleting the row.
+ * Single-use, short-lived token for the forgot-password flow. Only the SHA-256 of the raw token
+ * is stored; the raw value exists only in the email sent to the user.
  */
 @Getter
 @Setter
@@ -22,16 +21,18 @@ import java.time.LocalDateTime;
 @AllArgsConstructor
 @SuperBuilder
 @Entity
-public class UserSession extends BaseModel {
+public class PasswordResetToken extends BaseModel {
 
-    // varchar, not char: ddl-auto=validate compares JDBC type codes and a String field expects VARCHAR.
     @Column(nullable = false, unique = true, length = 64)
     private String tokenHash;
+
+    @ManyToOne(optional = false)
+    private User user;
 
     @Column(nullable = false)
     private LocalDateTime expiresAt;
 
-    @ManyToOne(optional = false)
-    private User user;
+    /** Null until the token is consumed. */
+    private LocalDateTime usedAt;
 
 }

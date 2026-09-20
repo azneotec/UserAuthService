@@ -1,5 +1,6 @@
 package com.azneotech.userauthservice.dtos;
 
+import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
@@ -10,9 +11,10 @@ import lombok.Setter;
 @Setter
 @NoArgsConstructor
 @AllArgsConstructor
-public class ValidateTokenRequestDto {
+public class ForgotPasswordRequestDto {
 
     @NotBlank
-    private String token;
+    @Email
+    private String email;
 
 }
