@@ -27,7 +27,7 @@ public class AuthConfig {
     /**
      * Stateless bearer-token security. Everything is authenticated except the endpoints a client
      * needs before it has a token (signup, login, password reset), the introspection endpoint
-     * other services call, and the health probe.
+     * other services call, the public user lookup by id ({@code GET /users/{id}}), and the health probe.
      * <p>
      * {@code authService} is {@code @Lazy} because it depends on {@link #passwordEncoder()} from
      * this same class; the filter only touches it per request, so late resolution is harmless.
@@ -50,6 +50,8 @@ public class AuthConfig {
                                 "/auth/validateToken",
                                 "/auth/forgot-password",
                                 "/auth/reset-password").permitAll()
+                        // Numeric-only so "/users/me" still requires a token.
+                        .requestMatchers(HttpMethod.GET, "/users/{id:[0-9]+}").permitAll()
                         .requestMatchers("/actuator/health", "/actuator/health/**").permitAll()
                         .anyRequest().authenticated())
                 .addFilterBefore(new JwtAuthenticationFilter(authService), UsernamePasswordAuthenticationFilter.class);

@@ -1,5 +1,6 @@
 package com.azneotech.userauthservice.services;
 
+import com.azneotech.userauthservice.clients.KafkaProducerClient;
 import com.azneotech.userauthservice.exceptions.PasswordMismatchException;
 import com.azneotech.userauthservice.exceptions.UserAlreadyExistsException;
 import com.azneotech.userauthservice.exceptions.UserNotRegisteredException;
@@ -11,6 +12,7 @@ import com.azneotech.userauthservice.repos.RoleRepo;
 import com.azneotech.userauthservice.repos.SessionRepo;
 import com.azneotech.userauthservice.repos.UserRepo;
 import com.azneotech.userauthservice.utils.TokenHasher;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.ExpiredJwtException;
 import io.jsonwebtoken.Jwts;
@@ -55,12 +57,17 @@ class AuthServiceTest {
     @Mock SessionRepo sessionRepo;
     @Mock PasswordEncoder passwordEncoder;
     @Mock IJwtService jwtService;
+    @Mock KafkaProducerClient kafkaProducerClient;
+    @Mock ObjectMapper objectMapper;
 
     AuthService authService;
 
     @BeforeEach
     void setUp() {
-        authService = new AuthService(userRepo, roleRepo, sessionRepo, passwordEncoder, jwtService, CLOCK);
+        authService = new AuthService(
+                userRepo, roleRepo, sessionRepo, passwordEncoder,
+                jwtService, CLOCK, kafkaProducerClient, objectMapper
+        );
     }
 
     private static Role role(String value) {

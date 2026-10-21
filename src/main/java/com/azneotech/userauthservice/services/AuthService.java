@@ -1,5 +1,7 @@
 package com.azneotech.userauthservice.services;
 
+import com.azneotech.userauthservice.clients.KafkaProducerClient;
+import com.azneotech.userauthservice.dtos.EmailDto;
 import com.azneotech.userauthservice.exceptions.PasswordMismatchException;
 import com.azneotech.userauthservice.exceptions.UserAlreadyExistsException;
 import com.azneotech.userauthservice.exceptions.UserNotRegisteredException;
@@ -11,6 +13,8 @@ import com.azneotech.userauthservice.repos.RoleRepo;
 import com.azneotech.userauthservice.repos.SessionRepo;
 import com.azneotech.userauthservice.repos.UserRepo;
 import com.azneotech.userauthservice.utils.TokenHasher;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.ExpiredJwtException;
 import io.jsonwebtoken.JwtException;
@@ -38,6 +42,8 @@ public class AuthService implements IAuthService {
     private final PasswordEncoder passwordEncoder;
     private final IJwtService jwtService;
     private final Clock clock;
+    private final KafkaProducerClient kafkaProducerClient;
+    private final ObjectMapper objectMapper;
 
     public AuthService(
             UserRepo userRepo,
@@ -45,7 +51,9 @@ public class AuthService implements IAuthService {
             SessionRepo sessionRepo,
             PasswordEncoder passwordEncoder,
             IJwtService jwtService,
-            Clock clock
+            Clock clock,
+            KafkaProducerClient kafkaProducerClient,
+            ObjectMapper objectMapper
     ) {
         this.userRepo = userRepo;
         this.roleRepo = roleRepo;
@@ -53,6 +61,8 @@ public class AuthService implements IAuthService {
         this.passwordEncoder = passwordEncoder;
         this.jwtService = jwtService;
         this.clock = clock;
+        this.kafkaProducerClient = kafkaProducerClient;
+        this.objectMapper = objectMapper;
     }
 
     @Override
@@ -81,11 +91,22 @@ public class AuthService implements IAuthService {
                 .build();
         user.getRoles().add(defaultRole);
 
+        // Putting message to KAFKA
+        EmailDto emailDto = new EmailDto();
+        emailDto.setTo(email);
+        emailDto.setFrom("azneotech@gmail.com");
+        emailDto.setSubject("Welcome to scaler");
+        emailDto.setBody("Hey " + name + ", have a nice learning experience");
+
         try {
+            String message = objectMapper.writeValueAsString(emailDto);
+            kafkaProducerClient.sendMessage("signup", message);
             return userRepo.save(user);
         } catch (DataIntegrityViolationException e) {
             // The pre-checks above race with concurrent signups; the unique constraints are the real guard.
             throw new UserAlreadyExistsException("User with this email or phone number already exists");
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException(e.getMessage());
         }
     }
 

@@ -9,14 +9,11 @@ import com.azneotech.userauthservice.services.IUserService;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PatchMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 
 /**
- * Profile endpoints for the caller identified by their bearer token. All routes require authentication.
+ * Profile endpoints for the caller identified by their bearer token. All routes require authentication
+ * except {@code GET /users/{id}}, which is permitted in {@code AuthConfig}.
  */
 @RestController
 @RequestMapping("/users")
@@ -39,6 +36,11 @@ public class UserController {
                                                          @Valid @RequestBody UpdateProfileRequestDto requestDto) {
         User user = userService.updateProfile(principal.userId(), requestDto.getName(), requestDto.getPhoneNumber());
         return ResponseEntity.ok(UserMapper.toUserResponseDto(user));
+    }
+
+    @GetMapping("/{id}")
+    public ResponseEntity<UserResponseDto> getUserDetailsById(@PathVariable Long id) {
+        return ResponseEntity.ok(UserMapper.toUserResponseDto(userService.getById(id)));
     }
 
 }
