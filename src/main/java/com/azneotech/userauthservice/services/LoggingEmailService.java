@@ -2,17 +2,18 @@ package com.azneotech.userauthservice.services;
 
 import com.azneotech.userauthservice.configs.PasswordResetProperties;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 
 /**
- * Development stand-in for a real mail sender: writes the reset link to the application log.
+ * Development fallback for when Kafka isn't running: writes the reset link to the application log.
+ * Active only with {@code password-reset.delivery=log}; the default is {@link KafkaEmailService}.
  * <p>
- * <b>This logs a live credential.</b> Before any shared or production deployment, replace it with
- * an SMTP-backed {@link IEmailService} (e.g. {@code spring-boot-starter-mail} + {@code JavaMailSender}).
- * Because callers only depend on the interface, that is a one-class swap.
+ * <b>This logs a live credential.</b> Never enable it in a shared or production deployment.
  */
 @Slf4j
 @Service
+@ConditionalOnProperty(name = "password-reset.delivery", havingValue = "log")
 public class LoggingEmailService implements IEmailService {
 
     private final PasswordResetProperties properties;

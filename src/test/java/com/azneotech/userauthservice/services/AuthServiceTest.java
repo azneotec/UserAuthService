@@ -1,6 +1,7 @@
 package com.azneotech.userauthservice.services;
 
 import com.azneotech.userauthservice.clients.KafkaProducerClient;
+import com.azneotech.userauthservice.dtos.EmailDto;
 import com.azneotech.userauthservice.exceptions.PasswordMismatchException;
 import com.azneotech.userauthservice.exceptions.UserAlreadyExistsException;
 import com.azneotech.userauthservice.exceptions.UserNotRegisteredException;
@@ -12,6 +13,7 @@ import com.azneotech.userauthservice.repos.RoleRepo;
 import com.azneotech.userauthservice.repos.SessionRepo;
 import com.azneotech.userauthservice.repos.UserRepo;
 import com.azneotech.userauthservice.utils.TokenHasher;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.ExpiredJwtException;
@@ -22,6 +24,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -40,6 +43,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -160,6 +164,43 @@ class AuthServiceTest {
 
             assertThatThrownBy(() -> authService.signup("Bob", "bob@example.com", null, "secret123"))
                     .isInstanceOf(UserAlreadyExistsException.class);
+            verifyNoInteractions(kafkaProducerClient);
+        }
+
+        @Test
+        void publishesWelcomeEmailOnlyAfterTheUserIsSaved() throws Exception {
+            givenSignupWillSucceed();
+            ArgumentCaptor<EmailDto> emailCaptor = ArgumentCaptor.forClass(EmailDto.class);
+            when(objectMapper.writeValueAsString(emailCaptor.capture())).thenReturn("{welcome}");
+
+            authService.signup("Bob", "Bob@Example.com", null, "secret123");
+
+            InOrder inOrder = inOrder(userRepo, kafkaProducerClient);
+            inOrder.verify(userRepo).save(any(User.class));
+            inOrder.verify(kafkaProducerClient).sendAfterCommit(KafkaProducerClient.SIGNUP_TOPIC, "{welcome}");
+            EmailDto email = emailCaptor.getValue();
+            assertThat(email.getTo()).isEqualTo("bob@example.com");
+            assertThat(email.getFrom()).isEqualTo(KafkaProducerClient.EMAIL_SENDER);
+            assertThat(email.getSubject()).isEqualTo("Welcome to scaler");
+            assertThat(email.getBody()).contains("Bob");
+        }
+
+        @Test
+        void signupStillSucceedsWhenTheWelcomeEmailCannotBeSerialized() throws Exception {
+            givenSignupWillSucceed();
+            when(objectMapper.writeValueAsString(any())).thenThrow(new JsonProcessingException("boom") { });
+
+            User saved = authService.signup("Bob", "bob@example.com", null, "secret123");
+
+            assertThat(saved.getEmail()).isEqualTo("bob@example.com");
+            verifyNoInteractions(kafkaProducerClient);
+        }
+
+        private void givenSignupWillSucceed() {
+            when(userRepo.findByEmail("bob@example.com")).thenReturn(Optional.empty());
+            when(roleRepo.findByValue("ROLE_USER")).thenReturn(Optional.of(role("ROLE_USER")));
+            when(passwordEncoder.encode(anyString())).thenReturn("encoded");
+            when(userRepo.save(any(User.class))).thenAnswer(invocation -> invocation.getArgument(0));
         }
     }
 

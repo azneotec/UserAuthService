@@ -4,12 +4,19 @@ Spring Boot authentication service for a microservice setup: registration, JWT l
 password reset, logout, and a token-introspection endpoint that other services call to verify tokens.
 Backed by MySQL via Spring Data JPA, with Flyway managing the schema.
 
+## Scope
+
+Registration is **email and password only**. Social-media sign-up (Google, Facebook, etc.) is out of scope for now.
+Also deferred: change password while logged in, email change and verification, refresh tokens, account
+deactivation, admin/role management (`ROLE_ADMIN` is seeded but not assignable), and login rate limiting.
+
 ## Prerequisites
 
 | Tool | Version | Notes |
 |---|---|---|
 | Java (JDK) | 17 | e.g. `sdk install java 17.0.20-tem` with [SDKMAN](https://sdkman.io) |
 | MySQL | 8.x | running locally on `3306`, or reachable via the `DB_*` env vars below |
+| Kafka | any | `localhost:9092` for welcome and password-reset emails; optional, since publishing is best-effort (`NotificationService/docker-compose.yml` starts one) |
 | Maven | – | not required; the project ships the wrapper (`./mvnw`) |
 | `openssl` | any | only to generate a signing key for non-dev environments |
 
@@ -42,11 +49,18 @@ Backed by MySQL via Spring Data JPA, with Flyway managing the schema.
 ## Run
 
 ```bash
-./mvnw spring-boot:run        # starts on http://localhost:8082
-curl localhost:8082/actuator/health   # {"status":"UP"}
+./mvnw spring-boot:run        # starts on http://localhost:8001
+curl localhost:8001/actuator/health   # {"status":"UP"}
 ```
 
-To use another port: `./mvnw spring-boot:run -Dspring-boot.run.arguments=--server.port=8083`.
+| Run | Port | How |
+|---|---|---|
+| Single instance (default) | `8001` | `./mvnw spring-boot:run` |
+| Second instance | `9001` | `SERVER_PORT=9001 ./mvnw spring-boot:run` |
+
+The service registers with Eureka (`http://localhost:8761/eureka/`, start `ServiceDiscoveryApplication` first)
+as `userservice`. A second instance registers under the same name on its own port, and callers such as
+`ProductCatalogService` (`http://userservice/users/{id}`) are load-balanced across both.
 
 ## Test
 
@@ -68,9 +82,13 @@ Every response is JSON. Authenticated routes expect the token from `/auth/login`
 | POST | `/auth/logout` | Bearer | – | – | 204 · 401 |
 | POST | `/auth/forgot-password` | – | `{email}` | `{message}` | 200 (always) · 400 |
 | POST | `/auth/reset-password` | – | `{token, newPassword}` | `{message}` | 200 · 400 |
+| GET | `/users/{id}` | – | – | user | 200 · 404 |
 | GET | `/users/me` | Bearer | – | user | 200 · 401 · 404 |
 | PATCH | `/users/me` | Bearer | `{name?, phoneNumber?}` | user | 200 · 400 · 401 · 409 |
 | GET | `/actuator/health` | – | – | `{status}` | 200 |
+
+`GET /users/{id}` is deliberately public: other services (e.g. `ProductCatalogService`) call it by Eureka name
+(`http://userservice/users/{id}`) to exercise the service-discovery flow.
 
 `user` is `{id, name, email, phoneNumber, roles}`. Errors share one shape:
 `{status, error, message, timestamp, fieldErrors?}` — `fieldErrors` is a `field -> message` map on validation
@@ -79,7 +97,7 @@ failures. Login returns the same `401 "Invalid email or password"` for an unknow
 ### Quick walkthrough
 
 ```bash
-B=http://localhost:8082
+B=http://localhost:8001
 
 # 1. register
 curl -s $B/auth/signup -H 'Content-Type: application/json' \
@@ -104,18 +122,29 @@ curl -s -X POST $B/auth/logout -H "Authorization: Bearer $TOKEN"
 ### Password reset
 
 `POST /auth/forgot-password` always answers 200 with the same message, whether or not the email exists.
-Email delivery is currently a stub: `LoggingEmailService` prints the reset link to the application log
-(`[EMAIL STUB] Password reset link for ...`). Copy the token from there and call `/auth/reset-password`.
-Provide an SMTP-backed `IEmailService` before deploying anywhere real.
+When it does exist, `KafkaEmailService` publishes the reset email (recipient, subject, and a body containing
+the link) to the `password-reset` Kafka topic once the reset token is committed; `NotificationService`
+consumes it and sends the mail. Delivery is best-effort: if Kafka is unreachable the failure is logged and
+the request still answers 200.
+
+Without Kafka (local runs), set `password-reset.delivery=log` (or `PASSWORD_RESET_DELIVERY=log`).
+`LoggingEmailService` then prints the link to the application log (`[EMAIL STUB] Password reset link for ...`),
+which you copy into `/auth/reset-password`. It logs a live credential, so never use it in a shared environment.
+
+### Welcome email
+
+Signup saves the user first, then publishes a welcome email to the `signup` Kafka topic after the transaction
+commits. Like the reset email, it is best-effort: a Kafka outage is logged and signup still returns 201.
+Producer sends wait at most 3s for the broker (`spring.kafka.producer.properties.max.block.ms`).
 
 ## Architecture
 
 Classic layered Spring Boot app, package `com.azneotech.userauthservice`:
 
 ```
-controllers   AuthController (/auth/*), UserController (/users/me), ControllerAdvisor (error JSON)
+controllers   AuthController (/auth/*), UserController (/users/*), ControllerAdvisor (error JSON)
      |
-services      IAuthService, IUserService, IPasswordResetService, IJwtService, IEmailService
+services      IAuthService, IUserService, IPasswordResetService, IJwtService, IEmailService (Kafka by default)
      |         (interface + impl pairs; all business rules live here)
 repos         UserRepo, RoleRepo, SessionRepo, PasswordResetTokenRepo  (Spring Data JPA)
      |
@@ -170,6 +199,7 @@ Never edit a migration that has already run — add a new `V<n>` file instead.
 | `jwt.expiration` | `24h` (`JWT_EXPIRATION`) | token + session lifetime |
 | `jwt.issuer` | `user-auth-service` | `iss` claim |
 | `session.cleanup-interval` | `PT1H` | how often expired sessions are swept to `INACTIVE` |
+| `password-reset.delivery` | `kafka` | `kafka` publishes the reset email to `NotificationService`; `log` only logs the link (dev) |
 | `password-reset.expiration` | `15m` | reset-token lifetime |
 | `password-reset.link-base-url` | `http://localhost:3000/reset-password?token=` | prefix for the emailed link |
 
@@ -177,7 +207,7 @@ Never edit a migration that has already run — add a new `V<n>` file instead.
 
 | Symptom | Cause / fix |
 |---|---|
-| `Port 8082 was already in use` | another instance is running (often from the IDE); stop it or pass `--server.port=8083` |
+| `Port 8001 was already in use` | another instance is running (often from the IDE); stop it, or run a second instance on purpose with `SERVER_PORT=9001` |
 | `Migration checksum mismatch for migration version N` | a migration file that already ran was edited; restore its original content |
 | `Cannot drop table 'user' referenced by a foreign key constraint` | drop children first: `DROP TABLE password_reset_token, user_session, user_roles, user, role, flyway_schema_history;` — or simply drop and recreate the database |
 | `WeakKeyException` at startup | `JWT_SECRET` decodes to fewer than 32 bytes; regenerate with `openssl rand -base64 32` |

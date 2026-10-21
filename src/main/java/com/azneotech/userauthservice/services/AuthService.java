@@ -91,22 +91,30 @@ public class AuthService implements IAuthService {
                 .build();
         user.getRoles().add(defaultRole);
 
-        // Putting message to KAFKA
-        EmailDto emailDto = new EmailDto();
-        emailDto.setTo(email);
-        emailDto.setFrom("azneotech@gmail.com");
-        emailDto.setSubject("Welcome to scaler");
-        emailDto.setBody("Hey " + name + ", have a nice learning experience");
-
+        User saved;
         try {
-            String message = objectMapper.writeValueAsString(emailDto);
-            kafkaProducerClient.sendMessage("signup", message);
-            return userRepo.save(user);
+            saved = userRepo.save(user);
         } catch (DataIntegrityViolationException e) {
             // The pre-checks above race with concurrent signups; the unique constraints are the real guard.
             throw new UserAlreadyExistsException("User with this email or phone number already exists");
+        }
+
+        publishWelcomeEmail(saved);
+        return saved;
+    }
+
+    /** Best-effort: a Kafka or serialization failure is logged and never fails the signup. */
+    private void publishWelcomeEmail(User user) {
+        EmailDto emailDto = new EmailDto();
+        emailDto.setTo(user.getEmail());
+        emailDto.setFrom(KafkaProducerClient.EMAIL_SENDER);
+        emailDto.setSubject("Welcome to scaler");
+        emailDto.setBody("Hey " + user.getName() + ", have a nice learning experience");
+
+        try {
+            kafkaProducerClient.sendAfterCommit(KafkaProducerClient.SIGNUP_TOPIC, objectMapper.writeValueAsString(emailDto));
         } catch (JsonProcessingException e) {
-            throw new RuntimeException(e.getMessage());
+            log.warn("Could not serialize welcome email for user {}", user.getId(), e);
         }
     }
 
