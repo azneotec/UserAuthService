@@ -85,6 +85,27 @@ The service registers with Eureka (`http://localhost:8761/eureka/`, start `Servi
 as `user-auth-service`. A second instance registers under the same name on its own port, and callers such as
 `ProductCatalogService` (`http://user-auth-service/users/{id}`) are load-balanced across both.
 
+### Run in Docker
+
+The `Dockerfile` containerizes only this service (multi-stage: JDK build, JRE runtime, non-root). MySQL, Kafka and
+Eureka are not in the image; point it at them with environment variables. Inside a container `localhost` is the
+container itself, so the host and broker addresses must be overridden. With the compose stack running
+(`make infra-up`) and Docker Desktop/OrbStack's `host.docker.internal`:
+
+```bash
+docker build -t user-auth-service .
+docker run --rm -p 8001:8001 \
+  -e DB_HOST=host.docker.internal -e DB_PORT=3307 \
+  -e SPRING_KAFKA_BOOTSTRAP_SERVERS=host.docker.internal:9092 \
+  -e EUREKA_CLIENT_ENABLED=false \
+  user-auth-service
+```
+
+Other variables: `DB_NAME`, `DB_USERNAME`, `DB_PASSWORD`, `JWT_SECRET` (set your own anywhere shared),
+`JWT_EXPIRATION`, `EUREKA_CLIENT_SERVICEURL_DEFAULTZONE`. `.env` is excluded from the image (`.dockerignore`), so
+pass values with `-e` or `--env-file .env` (unquoted values only). The image has a health check on
+`/actuator/health`.
+
 ## Test
 
 ```bash
