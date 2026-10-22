@@ -11,7 +11,7 @@ SKIP_TESTS ?= true
 # Export .env for one recipe line when present. Sourced by the shell (not `include`) so quoted values work.
 WITH_ENV = set -a; [ ! -f ./.env ] || . ./.env; set +a;
 
-.PHONY: jar run test clean
+.PHONY: jar run test clean infra-up infra-down infra-reset
 
 ## Build the jar with .env loaded (tests skipped by default; use SKIP_TESTS=false to run them)
 jar:
@@ -29,3 +29,15 @@ test:
 
 clean:
 	@./mvnw clean
+
+## Start MySQL and Kafka from docker-compose.yml and wait until healthy
+infra-up:
+	docker compose up -d --wait
+
+## Stop MySQL and Kafka, keeping their data
+infra-down:
+	docker compose down
+
+## Stop MySQL and Kafka and delete their data volumes
+infra-reset:
+	docker compose down -v

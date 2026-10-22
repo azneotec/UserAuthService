@@ -22,6 +22,13 @@ deactivation, general role management (`ROLE_ADMIN` can be granted, nothing else
 
 ## First-time setup
 
+**Shortcut: let Docker provide the dependencies.** `make infra-up` (or `docker compose up -d --wait`) starts MySQL
+with an empty `user_auth_service` database on `localhost:3307`, and Kafka on `localhost:9092` with the `signup` and
+`password-reset` topics plus a UI at http://localhost:8090. Then set `DB_PORT=3307` in `.env` (see below) and skip
+step 1. `make infra-down` stops it keeping the data; `make infra-reset` also deletes the data. It uses the same
+ports as the monorepo's root `docker-compose.yml`, so run only one of them. Eureka is not part of it: start
+`ServiceDiscoveryApplication` yourself, or run without it and ignore the registration warnings.
+
 1. **Create the database** (Flyway creates all tables on first start; nothing else to run by hand):
 
    ```sql
