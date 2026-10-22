@@ -2,7 +2,10 @@ package com.azneotech.userauthservice.services;
 
 import com.azneotech.userauthservice.exceptions.UserAlreadyExistsException;
 import com.azneotech.userauthservice.exceptions.UserNotFoundException;
+import com.azneotech.userauthservice.models.Role;
 import com.azneotech.userauthservice.models.User;
+import com.azneotech.userauthservice.repos.RoleRepo;
+import com.azneotech.userauthservice.repos.SessionRepo;
 import com.azneotech.userauthservice.repos.UserRepo;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -18,6 +21,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -25,12 +29,14 @@ import static org.mockito.Mockito.when;
 class UserServiceTest {
 
     @Mock UserRepo userRepo;
+    @Mock RoleRepo roleRepo;
+    @Mock SessionRepo sessionRepo;
 
     UserService userService;
 
     @BeforeEach
     void setUp() {
-        userService = new UserService(userRepo);
+        userService = new UserService(userRepo, roleRepo, sessionRepo);
     }
 
     private static User alice() {
@@ -115,6 +121,51 @@ class UserServiceTest {
         when(userRepo.findById(404L)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> userService.updateProfile(404L, "X", null)).isInstanceOf(UserNotFoundException.class);
+    }
+
+    @Test
+    void promoteToAdmin_grantsRoleAndRevokesSessions() {
+        User user = alice();
+        user.getRoles().add(Role.builder().value("ROLE_USER").build());
+        Role admin = Role.builder().value("ROLE_ADMIN").build();
+        when(userRepo.findById(7L)).thenReturn(Optional.of(user));
+        when(roleRepo.findByValue("ROLE_ADMIN")).thenReturn(Optional.of(admin));
+        when(userRepo.save(user)).thenReturn(user);
+
+        User promoted = userService.promoteToAdmin(7L);
+
+        assertThat(promoted.getRoles()).extracting(Role::getValue).containsExactly("ROLE_USER", "ROLE_ADMIN");
+        verify(sessionRepo).deactivateAllActiveForUser(7L);
+    }
+
+    @Test
+    void promoteToAdmin_isNoOpForExistingAdmin() {
+        User user = alice();
+        user.getRoles().add(Role.builder().value("ROLE_ADMIN").build());
+        when(userRepo.findById(7L)).thenReturn(Optional.of(user));
+
+        User promoted = userService.promoteToAdmin(7L);
+
+        assertThat(promoted.getRoles()).hasSize(1);
+        verify(userRepo, never()).save(any());
+        verifyNoInteractions(roleRepo, sessionRepo);
+    }
+
+    @Test
+    void promoteToAdmin_throwsWhenUserMissing() {
+        when(userRepo.findById(404L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> userService.promoteToAdmin(404L)).isInstanceOf(UserNotFoundException.class);
+        verifyNoInteractions(sessionRepo);
+    }
+
+    @Test
+    void promoteToAdmin_failsLoudlyWhenRoleNotSeeded() {
+        when(userRepo.findById(7L)).thenReturn(Optional.of(alice()));
+        when(roleRepo.findByValue("ROLE_ADMIN")).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> userService.promoteToAdmin(7L)).isInstanceOf(IllegalStateException.class);
+        verify(userRepo, never()).save(any());
     }
 
 }

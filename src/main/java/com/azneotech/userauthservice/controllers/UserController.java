@@ -12,8 +12,9 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
 /**
- * Profile endpoints for the caller identified by their bearer token. All routes require authentication
- * except {@code GET /users/{id}}, which is permitted in {@code AuthConfig}.
+ * Profile endpoints for the caller identified by their bearer token, plus admin-only user management.
+ * All routes require authentication except {@code GET /users/{id}}, which is permitted in {@code AuthConfig};
+ * {@code PUT /users/{id}/role/admin} additionally requires {@code ROLE_ADMIN}, enforced there too.
  */
 @RestController
 @RequestMapping("/users")
@@ -41,6 +42,11 @@ public class UserController {
     @GetMapping("/{id}")
     public ResponseEntity<UserResponseDto> getUserDetailsById(@PathVariable Long id) {
         return ResponseEntity.ok(UserMapper.toUserResponseDto(userService.getById(id)));
+    }
+
+    @PutMapping("/{id}/role/admin")
+    public ResponseEntity<UserResponseDto> promoteToAdmin(@PathVariable Long id) {
+        return ResponseEntity.ok(UserMapper.toUserResponseDto(userService.promoteToAdmin(id)));
     }
 
 }

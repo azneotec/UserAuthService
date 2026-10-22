@@ -1,5 +1,6 @@
 package com.azneotech.userauthservice.configs;
 
+import com.azneotech.userauthservice.security.JwtAccessDeniedHandler;
 import com.azneotech.userauthservice.security.JwtAuthenticationEntryPoint;
 import com.azneotech.userauthservice.security.JwtAuthenticationFilter;
 import com.azneotech.userauthservice.services.IAuthService;
@@ -28,6 +29,7 @@ public class AuthConfig {
      * Stateless bearer-token security. Everything is authenticated except the endpoints a client
      * needs before it has a token (signup, login, password reset), the introspection endpoint
      * other services call, the public user lookup by id ({@code GET /users/{id}}), and the health probe.
+     * Granting {@code ROLE_ADMIN} is limited to callers who already hold it.
      * <p>
      * {@code authService} is {@code @Lazy} because it depends on {@link #passwordEncoder()} from
      * this same class; the filter only touches it per request, so late resolution is harmless.
@@ -42,7 +44,9 @@ public class AuthConfig {
                 .formLogin(AbstractHttpConfigurer::disable)
                 .logout(AbstractHttpConfigurer::disable)
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-                .exceptionHandling(handling -> handling.authenticationEntryPoint(new JwtAuthenticationEntryPoint(objectMapper)))
+                .exceptionHandling(handling -> handling
+                        .authenticationEntryPoint(new JwtAuthenticationEntryPoint(objectMapper))
+                        .accessDeniedHandler(new JwtAccessDeniedHandler(objectMapper)))
                 .authorizeHttpRequests(authorize -> authorize
                         .requestMatchers(HttpMethod.POST,
                                 "/auth/signup",
@@ -53,6 +57,7 @@ public class AuthConfig {
                         // Numeric-only so "/users/me" still requires a token.
                         .requestMatchers(HttpMethod.GET, "/users/{id:[0-9]+}").permitAll()
                         .requestMatchers("/actuator/health", "/actuator/health/**").permitAll()
+                        .requestMatchers(HttpMethod.PUT, "/users/{id:[0-9]+}/role/admin").hasAuthority("ROLE_ADMIN")
                         .anyRequest().authenticated())
                 .addFilterBefore(new JwtAuthenticationFilter(authService), UsernamePasswordAuthenticationFilter.class);
         return httpSecurity.build();

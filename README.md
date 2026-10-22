@@ -8,7 +8,7 @@ Backed by MySQL via Spring Data JPA, with Flyway managing the schema.
 
 Registration is **email and password only**. Social-media sign-up (Google, Facebook, etc.) is out of scope for now.
 Also deferred: change password while logged in, email change and verification, refresh tokens, account
-deactivation, admin/role management (`ROLE_ADMIN` is seeded but not assignable), and login rate limiting.
+deactivation, general role management (`ROLE_ADMIN` can be granted, nothing else), and login rate limiting.
 
 ## Prerequisites
 
@@ -53,14 +53,29 @@ deactivation, admin/role management (`ROLE_ADMIN` is seeded but not assignable),
 curl localhost:8001/actuator/health   # {"status":"UP"}
 ```
 
+Or with the Makefile (`make jar`, then `make run`; `make test`, `make clean`). `SKIP_TESTS=false make jar` runs
+the tests during the build.
+
+Both read a gitignored `.env` in the project directory: `application.properties` imports it
+(`spring.config.import=optional:file:.env[.properties]`) and the Makefile also sources it, so
+`./mvnw spring-boot:run`, `make run` and `java -jar` all pick up the same values. Copy the template and edit it:
+
+```bash
+cp .env.example .env   # DB_*, JWT_SECRET, JWT_EXPIRATION, SERVER_PORT
+```
+
+Use unquoted values (the file is parsed as `.properties` by Spring). A variable set in the real environment
+overrides `.env`, and the defaults in the table above apply to anything it leaves out. Without a `.env` nothing
+changes.
+
 | Run | Port | How |
 |---|---|---|
-| Single instance (default) | `8001` | `./mvnw spring-boot:run` |
-| Second instance | `9001` | `SERVER_PORT=9001 ./mvnw spring-boot:run` |
+| Single instance (default) | `8001` | `./mvnw spring-boot:run` or `make run` |
+| Second instance | `9001` | `SERVER_PORT=9001 ./mvnw spring-boot:run` or `SERVER_PORT=9001 make run` |
 
 The service registers with Eureka (`http://localhost:8761/eureka/`, start `ServiceDiscoveryApplication` first)
-as `userservice`. A second instance registers under the same name on its own port, and callers such as
-`ProductCatalogService` (`http://userservice/users/{id}`) are load-balanced across both.
+as `user-auth-service`. A second instance registers under the same name on its own port, and callers such as
+`ProductCatalogService` (`http://user-auth-service/users/{id}`) are load-balanced across both.
 
 ## Test
 
@@ -85,10 +100,21 @@ Every response is JSON. Authenticated routes expect the token from `/auth/login`
 | GET | `/users/{id}` | – | – | user | 200 · 404 |
 | GET | `/users/me` | Bearer | – | user | 200 · 401 · 404 |
 | PATCH | `/users/me` | Bearer | `{name?, phoneNumber?}` | user | 200 · 400 · 401 · 409 |
+| PUT | `/users/{id}/role/admin` | Bearer (`ROLE_ADMIN`) | – | user | 200 · 401 · 403 · 404 |
 | GET | `/actuator/health` | – | – | `{status}` | 200 |
 
 `GET /users/{id}` is deliberately public: other services (e.g. `ProductCatalogService`) call it by Eureka name
-(`http://userservice/users/{id}`) to exercise the service-discovery flow.
+(`http://user-auth-service/users/{id}`) to exercise the service-discovery flow.
+
+`PUT /users/{id}/role/admin` grants `ROLE_ADMIN` and is idempotent (an existing admin is returned unchanged).
+When the role is newly granted, the user's active sessions are revoked: roles are baked into the token, so they
+must log in again to get one that carries `ROLE_ADMIN`. There is no endpoint for the first admin; create it
+directly in the database (look up the ids in `role` and `user` first):
+
+```sql
+INSERT INTO user_roles (user_id, roles_id)
+SELECT u.id, r.id FROM `user` u, role r WHERE u.email = 'alice@example.com' AND r.value = 'ROLE_ADMIN';
+```
 
 `user` is `{id, name, email, phoneNumber, roles}`. Errors share one shape:
 `{status, error, message, timestamp, fieldErrors?}` — `fieldErrors` is a `field -> message` map on validation

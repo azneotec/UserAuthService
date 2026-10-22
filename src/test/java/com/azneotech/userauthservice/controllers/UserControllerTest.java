@@ -25,6 +25,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -142,6 +143,46 @@ class UserControllerTest {
                         .content("""
                                 {"name":"X"}
                                 """))
+                .andExpect(status().isUnauthorized());
+
+        verifyNoInteractions(userService);
+    }
+
+    @Test
+    @WithMockAuthenticatedUser(roles = "ROLE_ADMIN")
+    void promoteToAdmin_returnsUpdatedUserForAdmin() throws Exception {
+        User promoted = alice();
+        promoted.getRoles().add(Role.builder().value("ROLE_ADMIN").build());
+        when(userService.promoteToAdmin(8L)).thenReturn(promoted);
+
+        mockMvc.perform(put("/users/8/role/admin"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.roles[1]").value("ROLE_ADMIN"));
+    }
+
+    @Test
+    @WithMockAuthenticatedUser(roles = "ROLE_ADMIN")
+    void promoteToAdmin_returns404ForUnknownUser() throws Exception {
+        when(userService.promoteToAdmin(404L)).thenThrow(new UserNotFoundException("User with id 404 not found"));
+
+        mockMvc.perform(put("/users/404/role/admin"))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @WithMockAuthenticatedUser
+    void promoteToAdmin_isForbiddenForNonAdmin() throws Exception {
+        mockMvc.perform(put("/users/8/role/admin"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.status").value(403))
+                .andExpect(jsonPath("$.message").value("Insufficient permissions"));
+
+        verifyNoInteractions(userService);
+    }
+
+    @Test
+    void promoteToAdmin_requiresAuthentication() throws Exception {
+        mockMvc.perform(put("/users/8/role/admin"))
                 .andExpect(status().isUnauthorized());
 
         verifyNoInteractions(userService);
