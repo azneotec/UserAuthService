@@ -16,7 +16,8 @@ deactivation, general role management (`ROLE_ADMIN` can be granted, nothing else
 |---|---|---|
 | Java (JDK) | 17 | e.g. `sdk install java 17.0.20-tem` with [SDKMAN](https://sdkman.io) |
 | MySQL | 8.x | running locally on `3306`, or reachable via the `DB_*` env vars below |
-| Kafka | any | `localhost:9092` for welcome and password-reset emails; optional, since publishing is best-effort (`NotificationService/docker-compose.yml` starts one) |
+| Kafka | any | `localhost:9092` for welcome and password-reset emails; optional, since publishing is best-effort |
+| Docker | any | optional: `docker-compose.yml` starts MySQL and Kafka for you (see First-time setup) |
 | Maven | – | not required; the project ships the wrapper (`./mvnw`) |
 | `openssl` | any | only to generate a signing key for non-dev environments |
 
@@ -36,7 +37,7 @@ ports as the monorepo's root `docker-compose.yml`, so run only one of them. Eure
    ```
 
 2. **Point the app at it.** Local defaults work out of the box (`localhost:3306`, `root`/`password`).
-   Anything else goes through environment variables:
+   Anything else goes through environment variables or a `.env` file (see Run):
 
    | Env var | Default |
    |---|---|
@@ -115,8 +116,14 @@ Every response is JSON. Authenticated routes expect the token from `/auth/login`
 
 `PUT /users/{id}/role/admin` grants `ROLE_ADMIN` and is idempotent (an existing admin is returned unchanged).
 When the role is newly granted, the user's active sessions are revoked: roles are baked into the token, so they
-must log in again to get one that carries `ROLE_ADMIN`. There is no endpoint for the first admin; create it
-directly in the database (look up the ids in `role` and `user` first):
+must log in again to get one that carries `ROLE_ADMIN`.
+
+The first admin comes from migration `V6__seed_admin_user.sql`: `azad.admintest1@yopmail.com` / `password`, with
+`ROLE_USER` and `ROLE_ADMIN`. The migration skips the insert if that email already exists. **That is a known
+password committed to the repo**, and the mailbox is a public disposable inbox, so anyone can also take the
+account over through `/auth/forgot-password`. Fine for local development; before this runs anywhere shared,
+change the hash in V6 (if it hasn't run yet) or delete the user and create your own. To make someone else the
+first admin by hand instead:
 
 ```sql
 INSERT INTO user_roles (user_id, roles_id)
@@ -150,6 +157,11 @@ curl -s $B/auth/validateToken -H 'Content-Type: application/json' -d "{\"token\"
 
 # 5. log out; the token is now rejected everywhere
 curl -s -X POST $B/auth/logout -H "Authorization: Bearer $TOKEN"
+
+# 6. as an admin (see "The first admin" above), promote user 2; their sessions are revoked, so they log in again
+ADMIN=$(curl -s $B/auth/login -H 'Content-Type: application/json' \
+  -d '{"email":"azad.admintest1@yopmail.com","password":"password"}' | jq -r .token)
+curl -s -X PUT $B/users/2/role/admin -H "Authorization: Bearer $ADMIN"
 ```
 
 ### Password reset
@@ -175,7 +187,7 @@ Producer sends wait at most 3s for the broker (`spring.kafka.producer.properties
 Classic layered Spring Boot app, package `com.azneotech.userauthservice`:
 
 ```
-controllers   AuthController (/auth/*), UserController (/users/*), ControllerAdvisor (error JSON)
+controllers   AuthController (/auth/*), UserController (/users/*, incl. admin promotion), ControllerAdvisor (error JSON)
      |
 services      IAuthService, IUserService, IPasswordResetService, IJwtService, IEmailService (Kafka by default)
      |         (interface + impl pairs; all business rules live here)
@@ -183,8 +195,8 @@ repos         UserRepo, RoleRepo, SessionRepo, PasswordResetTokenRepo  (Spring D
      |
 models        User, Role, UserSession, PasswordResetToken  (all extend BaseModel: id, audit dates, status)
 
-security      JwtAuthenticationFilter + AuthenticatedUser principal + JSON 401 entry point
-configs       AuthConfig (security chain), AppConfig (properties, Clock), JpaAuditingConfig, SchedulingConfig
+security      JwtAuthenticationFilter + AuthenticatedUser principal + JSON 401 entry point and 403 access-denied handler
+configs       AuthConfig (security chain and route rules), AppConfig (properties, Clock), JpaAuditingConfig, SchedulingConfig
 dtos          request/response shapes with jakarta.validation annotations
 jobs          SessionCleanupJob (hourly sweep of expired sessions)
 ```
@@ -204,15 +216,17 @@ client ── Authorization: Bearer <jwt> ──> JwtAuthenticationFilter
 ```
 
 No token, or a bad one, means the request stays anonymous and the security rules return a 401 JSON body.
-Only signup, login, validateToken, the two password-reset routes and `/actuator/health` are public.
+Only signup, login, validateToken, the two password-reset routes, `GET /users/{id}` and `/actuator/health` are
+public. `PUT /users/{id}/role/admin` additionally needs `ROLE_ADMIN` in the token and answers a non-admin with a
+403 JSON body.
 
 ### Tokens and sessions
 
 - JWTs are HS256, signed with `jwt.secret`, and carry `jti`, `sub` (user id), `iss`, `iat`, `exp`, `email`,
   `roles`. Default lifetime 24h.
 - Every login inserts a `user_session` row storing a **SHA-256 of the token** (never the raw token) and its
-  expiry. Logout, expiry and password reset set the row to `INACTIVE`, so a token can be revoked before its
-  `exp`. Rows are never deleted.
+  expiry. Logout, expiry, password reset and being granted `ROLE_ADMIN` set the row to `INACTIVE`, so a token can be
+  revoked before its `exp`. Rows are never deleted.
 - Other services don't need the key: they `POST /auth/validateToken` and get back the user's id, email and
   roles (or `{"valid": false}` for anything malformed, forged, expired or revoked).
 
@@ -240,6 +254,8 @@ Never edit a migration that has already run — add a new `V<n>` file instead.
 
 | Symptom | Cause / fix |
 |---|---|
+| `port is already allocated` from `make infra-up` | the root `docker-compose.yml` or `NotificationService/docker-compose.yml` (or a host MySQL/Kafka) already holds `3307`, `9092` or `8090`; stop it, or set `MYSQL_PORT` for MySQL |
+| `403 Insufficient permissions` on `/users/{id}/role/admin` | the caller is not an admin. Being promoted revokes your old sessions, so after that log in again for a token that carries `ROLE_ADMIN` (the old one now gets 401) |
 | `Port 8001 was already in use` | another instance is running (often from the IDE); stop it, or run a second instance on purpose with `SERVER_PORT=9001` |
 | `Migration checksum mismatch for migration version N` | a migration file that already ran was edited; restore its original content |
 | `Cannot drop table 'user' referenced by a foreign key constraint` | drop children first: `DROP TABLE password_reset_token, user_session, user_roles, user, role, flyway_schema_history;` — or simply drop and recreate the database |
