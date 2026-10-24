@@ -1,0 +1,33 @@
+meta {
+  name: Validate Token
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}/auth/validateToken
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "token": "{{token}}"
+  }
+}
+
+assert {
+  res.status: eq 200
+  res.body.valid: eq true
+}
+
+tests {
+  test("carries the caller's identity", function () {
+    expect(res.body.email).to.equal(bru.getVar("userEmail"));
+    expect(res.body.roles).to.include("ROLE_USER");
+  });
+}
+
+docs {
+  Token introspection, as other services call it. Always 200; `valid` carries the answer.
+}

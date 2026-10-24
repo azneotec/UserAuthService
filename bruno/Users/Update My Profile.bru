@@ -1,0 +1,31 @@
+meta {
+  name: Update My Profile
+  type: http
+  seq: 2
+}
+
+patch {
+  url: {{baseUrl}}/users/me
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+body:json {
+  {
+    "name": "Bruno Renamed"
+  }
+}
+
+assert {
+  res.status: eq 200
+  res.body.name: eq Bruno Renamed
+}
+
+docs {
+  Partial update: an omitted field is left unchanged. Only `name` and `phoneNumber` are editable;
+  `phoneNumber` must be 7-15 digits with an optional leading + and be unique.
+}

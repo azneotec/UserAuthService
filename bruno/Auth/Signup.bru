@@ -1,0 +1,50 @@
+meta {
+  name: Signup
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/auth/signup
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "name": "{{userName}}",
+    "email": "{{userEmail}}",
+    "password": "{{userPassword}}",
+    "phoneNumber": "{{userPhone}}"
+  }
+}
+
+script:pre-request {
+  // Email and phone are unique per user, so mint a fresh pair on every run.
+  const stamp = Date.now();
+  bru.setVar("userEmail", `bruno.${stamp}@example.com`);
+  bru.setVar("userPhone", `+65${String(stamp).slice(-8)}`);
+}
+
+script:post-response {
+  if (res.status === 201) {
+    bru.setVar("userId", res.body.id);
+  }
+}
+
+assert {
+  res.status: eq 201
+}
+
+tests {
+  test("returns the new user without a password", function () {
+    expect(res.body.email).to.equal(bru.getVar("userEmail"));
+    expect(res.body.roles).to.include("ROLE_USER");
+    expect(res.body).to.not.have.property("password");
+  });
+}
+
+docs {
+  Registers a user with a generated email, then stores `userId` and `userEmail` for the requests after it.
+  `phoneNumber` is optional (7-15 digits, optional leading +) and must be unique.
+}

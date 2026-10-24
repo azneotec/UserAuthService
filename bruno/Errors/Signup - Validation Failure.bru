@@ -1,0 +1,31 @@
+meta {
+  name: Signup - Validation Failure
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/auth/signup
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "name": "",
+    "email": "not-an-email",
+    "password": "short",
+    "phoneNumber": "abc"
+  }
+}
+
+assert {
+  res.status: eq 400
+  res.body.message: eq Validation failed
+}
+
+tests {
+  test("lists every offending field", function () {
+    expect(res.body.fieldErrors).to.have.all.keys("name", "email", "password", "phoneNumber");
+  });
+}

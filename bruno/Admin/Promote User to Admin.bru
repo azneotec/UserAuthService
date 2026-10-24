@@ -1,0 +1,30 @@
+meta {
+  name: Promote User to Admin
+  type: http
+  seq: 2
+}
+
+put {
+  url: {{baseUrl}}/users/{{userId}}/role/admin
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{adminToken}}
+}
+
+assert {
+  res.status: eq 200
+}
+
+tests {
+  test("user now holds ROLE_ADMIN", function () {
+    expect(res.body.roles).to.include("ROLE_ADMIN");
+  });
+}
+
+docs {
+  Idempotent. When the role is newly granted, the target's active sessions are revoked because roles are
+  baked into the token, so that user's `token` stops working until they log in again (see Session > Login Again).
+}

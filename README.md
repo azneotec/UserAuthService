@@ -185,6 +185,14 @@ ADMIN=$(curl -s $B/auth/login -H 'Content-Type: application/json' \
 curl -s -X PUT $B/users/2/role/admin -H "Authorization: Bearer $ADMIN"
 ```
 
+### Bruno collection
+
+`bruno/` is a [Bruno](https://www.usebruno.com) collection covering every endpoint above, plus the error cases.
+Open the folder in Bruno and pick the `Local` (8001) or `Local-9001` environment. Signup creates a fresh user and
+the later requests reuse its token and id, so run the folders top to bottom (or the whole collection with
+`npx @usebruno/cli run -r --env Local` from `bruno/`). `Password Reset/Reset Password` is the one manual step: paste
+the token from the reset email into the `resetToken` environment variable first.
+
 ### Password reset
 
 `POST /auth/forgot-password` always answers 200 with the same message, whether or not the email exists.

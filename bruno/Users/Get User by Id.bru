@@ -1,0 +1,25 @@
+meta {
+  name: Get User by Id
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/users/{{userId}}
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 200
+}
+
+tests {
+  test("returns the requested user", function () {
+    expect(res.body.id).to.equal(bru.getVar("userId"));
+  });
+}
+
+docs {
+  Public on purpose: other services call it by Eureka name (`http://user-auth-service/users/{id}`).
+}

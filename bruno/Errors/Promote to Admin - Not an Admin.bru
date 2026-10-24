@@ -1,0 +1,23 @@
+meta {
+  name: Promote to Admin - Not an Admin
+  type: http
+  seq: 7
+}
+
+put {
+  url: {{baseUrl}}/users/{{userId}}/role/admin
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+assert {
+  res.status: eq 403
+}
+
+docs {
+  Sends the plain user's token, so it must run while that token is still live (before Admin and Session).
+}
